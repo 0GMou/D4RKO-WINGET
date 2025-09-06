@@ -9,8 +9,8 @@ on:
         type: string
   repository_dispatch:
     types: [mpv-release]
-  schedule:
-    - cron: "7 6 * * *"
+  # schedule:
+  #   - cron: "7 6 * * *"
 
 permissions:
   contents: write
