@@ -1,4 +1,5 @@
 name: Deploy WinGet REST source (d4rk0)
+
 on:
   workflow_dispatch:
     inputs:
@@ -18,11 +19,11 @@ on:
         type: string
         default: westeurope
       performance:
-        description: "Developer | Basic | Enhanced (Developer = bajo coste)"
+        description: "Demo = coste mínimo (usa free tier si existe)"
         required: true
         type: choice
-        options: [Developer, Basic, Enhanced]
-        default: Developer
+        options: [Demo, Basic, Enhanced]
+        default: Demo
       publisher_name:
         description: "Nombre del publisher mostrado por el source"
         required: false
@@ -44,7 +45,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure Login (service principal secret)
+      - name: Azure Login (service principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
@@ -56,7 +57,8 @@ jobs:
           Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
           Install-Module -Name Microsoft.WinGet.RestSource -AllowPrerelease -Force
 
-      - name: Deploy REST source
+      - name: Deploy REST source (Functions + Cosmos)
+        id: deploy
         shell: pwsh
         run: |
           Import-Module Microsoft.WinGet.RestSource
@@ -66,6 +68,7 @@ jobs:
           $perf  = "${{ inputs.performance }}"
           $pub   = "${{ inputs.publisher_name }}"
           $email = "${{ inputs.publisher_email }}"
+
           New-WinGetSource `
             -Name $name `
             -ResourceGroup $rg `
@@ -75,3 +78,44 @@ jobs:
             -PublisherEmail $email `
             -ShowConnectionInstructions `
             -InformationAction Continue -Verbose
+
+      - name: Verify Cosmos Free Tier (fail if not free)
+        shell: bash
+        run: |
+          rg="${{ inputs.resource_group }}"
+          # Busca cuentas Cosmos en el RG y verifica enableFreeTier
+          out=$(az cosmosdb list -g "$rg" --query "[].{name:name,free:enableFreeTier}" -o tsv)
+          echo "$out"
+          # Si no hay resultados, algo fue mal en el despliegue
+          [ -z "$out" ] && { echo "No Cosmos DB accounts found in $rg"; exit 1; }
+          # Si alguno NO está en free, falla para evitar costes
+          echo "$out" | awk '{print $2}' | grep -q "false" && { echo "Cosmos DB NOT in Free Tier. Aborting to avoid charges."; exit 1; }
+          echo "Cosmos DB Free Tier OK"
+
+      - name: Cap Application Insights to 0.1 GB/day
+        shell: pwsh
+        run: |
+          Install-Module Az.ApplicationInsights -Force
+          $rg = "${{ inputs.resource_group }}"
+          $apps = Get-AzApplicationInsights -ResourceGroupName $rg
+          if ($apps) {
+            foreach ($a in $apps) {
+              Write-Host "Capping App Insights '$($a.Name)'"
+              Set-AzApplicationInsightsDailyCap -ResourceGroupName $rg -Name $a.Name -DailyCapGB 0.1 -DisableNotificationWhenHitCap
+            }
+          } else {
+            Write-Host "No Application Insights components found in $rg"
+          }
+
+      - name: Show winget add command
+        shell: bash
+        run: |
+          # Obtiene la URL del Function App (hostnames) y muestra el comando
+          rg="${{ inputs.resource_group }}"
+          name="${{ inputs.source_name }}"
+          host=$(az webapp list -g "$rg" --query "[?contains(name,'$name')].{h:defaultHostName}" -o tsv | head -n1)
+          if [ -n "$host" ]; then
+            echo "winget source add -n ${name} -t Microsoft.Rest -a https://${host}/winget/"
+          else
+            echo "No webapp found. Check previous step logs."
+          }
