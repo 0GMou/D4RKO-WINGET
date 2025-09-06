@@ -1,0 +1,77 @@
+name: Deploy WinGet REST source (d4rk0)
+on:
+  workflow_dispatch:
+    inputs:
+      source_name:
+        description: "Nombre visible del origen (ej. d4rk0)"
+        required: true
+        type: string
+        default: d4rk0
+      resource_group:
+        description: "Resource Group destino"
+        required: true
+        type: string
+        default: rg-darko-winget
+      region:
+        description: "Azure region (ej. westeurope)"
+        required: true
+        type: string
+        default: westeurope
+      performance:
+        description: "Developer | Basic | Enhanced (Developer = bajo coste)"
+        required: true
+        type: choice
+        options: [Developer, Basic, Enhanced]
+        default: Developer
+      publisher_name:
+        description: "Nombre del publisher mostrado por el source"
+        required: false
+        type: string
+        default: d4rk0
+      publisher_email:
+        description: "Email del publisher (opcional)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (service principal secret)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          enable-AzPSSession: true
+
+      - name: Install WinGet REST module
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
+          Install-Module -Name Microsoft.WinGet.RestSource -AllowPrerelease -Force
+
+      - name: Deploy REST source
+        shell: pwsh
+        run: |
+          Import-Module Microsoft.WinGet.RestSource
+          $name  = "${{ inputs.source_name }}"
+          $rg    = "${{ inputs.resource_group }}"
+          $loc   = "${{ inputs.region }}"
+          $perf  = "${{ inputs.performance }}"
+          $pub   = "${{ inputs.publisher_name }}"
+          $email = "${{ inputs.publisher_email }}"
+          New-WinGetSource `
+            -Name $name `
+            -ResourceGroup $rg `
+            -Region $loc `
+            -ImplementationPerformance $perf `
+            -PublisherName $pub `
+            -PublisherEmail $email `
+            -ShowConnectionInstructions `
+            -InformationAction Continue -Verbose
