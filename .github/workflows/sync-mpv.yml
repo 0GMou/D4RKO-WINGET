@@ -1,0 +1,120 @@
+name: Sync MPV manifests (d4rk0)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Override version (e.g. 0.40.0). Leave empty to auto-detect latest."
+        required: false
+        type: string
+  repository_dispatch:
+    types: [mpv-release]
+  schedule:
+    - cron: "7 6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version and URLs
+        id: meta
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $owner = "0GMou"
+          $repo  = "D4RKO"
+
+          $ver = "${{ github.event.inputs.version }}"
+          if (-not $ver) { $ver = "${{ github.event.client_payload.version }}" }
+
+          if (-not $ver) {
+            $headers = @{
+              "Accept"       = "application/vnd.github+json"
+              "Authorization"= "Bearer $env:GITHUB_TOKEN"
+            }
+            $latest = Invoke-RestMethod -Method GET -Uri "https://api.github.com/repos/$owner/$repo/releases/latest" -Headers $headers
+            $tag = $latest.tag_name
+            if ($tag -match "^mpv-(.+)$") { $ver = $Matches[1] } else { throw "Unexpected tag format: $tag" }
+          }
+
+          "VER=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $zipUrl = "https://github.com/$owner/$repo/releases/download/mpv-$ver/d4rk0.mpv-$ver-windows-x64.zip"
+          "ZIP_URL=$zipUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          $dir = "manifests\d\d4rk0\d4rk0.mpv\$ver"
+          "DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          if (Test-Path (Join-Path $dir "d4rk0.mpv.yaml")) {
+            "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Skip if manifest already exists
+        if: ${{ steps.meta.outputs.exists == 'true' }}
+        shell: pwsh
+        run: |
+          Write-Host "Manifest for $env:VER already exists. Skipping."
+
+      - name: Download ZIP and compute SHA256
+        if: ${{ steps.meta.outputs.exists != 'true' }}
+        shell: pwsh
+        run: |
+          $dir    = $env:DIR
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+          $zip    = Join-Path $dir "mpv.zip"
+          Invoke-WebRequest $env:ZIP_URL -OutFile $zip
+          $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          "SHA256=$sha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Remove-Item $zip -Force
+
+      - name: Write singleton manifest
+        if: ${{ steps.meta.outputs.exists != 'true' }}
+        shell: pwsh
+        run: |
+          $ver    = $env:VER
+          $zipUrl = $env:ZIP_URL
+          $sha    = $env:SHA256
+          $dir    = $env:DIR
+          $path   = Join-Path $dir "d4rk0.mpv.yaml"
+
+          $yaml = @"
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+PackageIdentifier: d4rk0.mpv
+PackageVersion: $ver
+PackageLocale: en-US
+Publisher: d4rk0
+PublisherUrl: https://github.com/0GMou/D4RKO
+PackageName: MPV (d4rk0 build)
+License: GPL-2.0-or-later
+ShortDescription: Portable MPV build with OSC/Lua enabled; Windows x64.
+InstallerType: zip
+NestedInstallerType: portable
+Installers:
+  - Architecture: x64
+    InstallerUrl: $zipUrl
+    InstallerSha256: $sha
+    NestedInstallerFiles:
+      - RelativeFilePath: mpv.exe
+        PortableCommandAlias: mpv
+      - RelativeFilePath: mpv.com
+ManifestType: singleton
+ManifestVersion: 1.6.0
+"@
+
+          Set-Content -Path $path -Value $yaml -Encoding UTF8
+
+      - name: Commit manifest
+        if: ${{ steps.meta.outputs.exists != 'true' }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Add d4rk0.mpv ${{ env.VER }}"
+          add: "manifests/*"
