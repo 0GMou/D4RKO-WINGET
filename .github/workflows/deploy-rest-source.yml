@@ -19,11 +19,11 @@ on:
         type: string
         default: westeurope
       performance:
-        description: "Demo = coste mínimo (usa free tier si existe)"
+        description: "Developer | Basic | Enhanced (Developer = menor coste)"
         required: true
         type: choice
-        options: [Demo, Basic, Enhanced]
-        default: Demo
+        options: [Developer, Basic, Enhanced]
+        default: Developer
       publisher_name:
         description: "Nombre del publisher mostrado por el source"
         required: false
