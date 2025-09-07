@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+PackageIdentifier: d4rko.mpv
+PackageVersion: 0.40.0
+PackageLocale: en-US
+Publisher: d4rko
+PublisherUrl: https://github.com/0GMou/D4RKO
+PackageName: MPV (d4rko build)
+License: GPL-2.0-or-later
+ShortDescription: Portable MPV build with OSC/Lua enabled; Windows x64.
+InstallerType: zip
+NestedInstallerType: portable
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/0GMou/D4RKO/releases/download/mpv-0.40.0/d4rko.mpv-0.40.0-windows-x64.zip
+    InstallerSha256: 7a17f5e46b8ad8222e9ba44872b73933d3895c2e4fef96c79cc8ef8eb1cdac14
+    NestedInstallerFiles:
+      - RelativeFilePath: mpv.exe
+        PortableCommandAlias: mpv
+      - RelativeFilePath: mpv.com
+ManifestType: singleton
+ManifestVersion: 1.6.0
