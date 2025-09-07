@@ -25,7 +25,7 @@ on:
         options: [Developer, Basic, Enhanced]
         default: Developer
       publisher_name:
-        description: "Publisher name mostrado por el source"
+        description: "Publisher mostrado por el source"
         required: false
         type: string
         default: d4rk0
@@ -55,31 +55,15 @@ jobs:
           [ -z "${PUBLISHER_EMAIL:-}" ] && { echo "Falta el secret PUBLISHER_EMAIL"; exit 1; }
           az account show --query id -o tsv >/dev/null
 
-      - name: Preflight: providers
+      - name: Preflight: providers registrados
         shell: bash
         run: |
           set -euo pipefail
           need=(Microsoft.Web Microsoft.DocumentDB Microsoft.Storage Microsoft.Insights Microsoft.OperationalInsights Microsoft.KeyVault Microsoft.AppConfiguration Microsoft.ApiManagement)
-          notok=()
           for ns in "${need[@]}"; do
             st=$(az provider show -n "$ns" --query registrationState -o tsv || true)
-            [ "$st" != "Registered" ] && notok+=("$ns:$st")
+            [ "$st" != "Registered" ] && { echo "Provider no registrado: $ns (estado=$st)"; exit 1; }
           done
-          if [ ${#notok[@]} -gt 0 ]; then
-            printf 'Providers no registrados: %s\n' "${notok[@]}"
-            exit 1
-          fi
-
-      - name: Preflight: permisos RBAC en el RG
-        shell: bash
-        run: |
-          set -euo pipefail
-          rg="${{ inputs.resource_group }}"
-          rgid=$(az group show -n "$rg" --query id -o tsv)
-          sp_appid=$(az account show --query user.name -o tsv)
-          sp_id=$(az ad sp show --id "$sp_appid" --query id -o tsv)
-          az role assignment create --assignee "$sp_id" --role Reader --scope "$rgid" >/dev/null
-          az role assignment delete --assignee "$sp_id" --role Reader --scope "$rgid" >/dev/null
 
       - name: Preflight: comprobar Free Tier de Cosmos en la suscripción
         shell: bash
@@ -87,7 +71,7 @@ jobs:
           set -euo pipefail
           used=$(az cosmosdb list --query "[?enableFreeTier==\`true\`].[name,resourceGroup]" -o tsv | wc -l | tr -d ' ')
           if [ "$used" -gt 0 ] && [ "${{ inputs.performance }}" = "Developer" ]; then
-            echo "Ya existe una cuenta Cosmos Free Tier en esta suscripción. Cambia de suscripción o usa 'Basic'."
+            echo "Ya existe una cuenta Cosmos Free Tier en la suscripción; abortando para evitar costes. Use 'Basic' o otra suscripción."
             exit 1
           fi
 
@@ -149,7 +133,7 @@ jobs:
           set -euo pipefail
           rg="${{ inputs.resource_group }}"
           list=$(az cosmosdb list -g "$rg" --query "[].{name:name,free:enableFreeTier}" -o tsv)
-          [ -z "$list" ] && { echo "No Cosmos DB en RG"; exit 1; }
+          [ -z "$list" ] && { echo "No se creó Cosmos en el RG"; exit 1; }
           echo "$list" | awk '{print $1" freeTier="$2}'
           echo "$list" | awk '{print $2}' | grep -q "true" || { echo "La cuenta Cosmos del RG no está en Free Tier"; exit 1; }
 
