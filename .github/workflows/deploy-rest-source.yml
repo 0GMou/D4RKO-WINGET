@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_name:
-        description: "Nombre visible del origen (ej. d4rk0)"
+        description: "Nombre visible del origen"
         required: true
         type: string
         default: d4rk0
@@ -19,21 +19,16 @@ on:
         type: string
         default: westeurope
       performance:
-        description: "Developer | Basic | Enhanced (Developer = menor coste)"
+        description: "Developer | Basic | Enhanced"
         required: true
         type: choice
         options: [Developer, Basic, Enhanced]
         default: Developer
       publisher_name:
-        description: "Nombre del publisher mostrado por el source"
+        description: "Publisher name mostrado por el source"
         required: false
         type: string
         default: d4rk0
-      publisher_email:
-        description: "Email del publisher (opcional)"
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -45,11 +40,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure Login (service principal)
+      - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           enable-AzPSSession: true
+
+      - name: Preflight: secrets y suscripción
+        shell: bash
+        env:
+          PUBLISHER_EMAIL: ${{ secrets.PUBLISHER_EMAIL }}
+        run: |
+          set -euo pipefail
+          [ -z "${PUBLISHER_EMAIL:-}" ] && { echo "Falta el secret PUBLISHER_EMAIL"; exit 1; }
+          az account show --query id -o tsv >/dev/null
+
+      - name: Preflight: providers
+        shell: bash
+        run: |
+          set -euo pipefail
+          need=(Microsoft.Web Microsoft.DocumentDB Microsoft.Storage Microsoft.Insights Microsoft.OperationalInsights Microsoft.KeyVault Microsoft.AppConfiguration Microsoft.ApiManagement)
+          notok=()
+          for ns in "${need[@]}"; do
+            st=$(az provider show -n "$ns" --query registrationState -o tsv || true)
+            [ "$st" != "Registered" ] && notok+=("$ns:$st")
+          done
+          if [ ${#notok[@]} -gt 0 ]; then
+            printf 'Providers no registrados: %s\n' "${notok[@]}"
+            exit 1
+          fi
+
+      - name: Preflight: permisos RBAC en el RG
+        shell: bash
+        run: |
+          set -euo pipefail
+          rg="${{ inputs.resource_group }}"
+          rgid=$(az group show -n "$rg" --query id -o tsv)
+          sp_appid=$(az account show --query user.name -o tsv)
+          sp_id=$(az ad sp show --id "$sp_appid" --query id -o tsv)
+          az role assignment create --assignee "$sp_id" --role Reader --scope "$rgid" >/dev/null
+          az role assignment delete --assignee "$sp_id" --role Reader --scope "$rgid" >/dev/null
+
+      - name: Preflight: comprobar Free Tier de Cosmos en la suscripción
+        shell: bash
+        run: |
+          set -euo pipefail
+          used=$(az cosmosdb list --query "[?enableFreeTier==\`true\`].[name,resourceGroup]" -o tsv | wc -l | tr -d ' ')
+          if [ "$used" -gt 0 ] && [ "${{ inputs.performance }}" = "Developer" ]; then
+            echo "Ya existe una cuenta Cosmos Free Tier en esta suscripción. Cambia de suscripción o usa 'Basic'."
+            exit 1
+          fi
 
       - name: Install WinGet REST module
         shell: pwsh
@@ -57,7 +97,7 @@ jobs:
           Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
           Install-Module -Name Microsoft.WinGet.RestSource -AllowPrerelease -Force
 
-      - name: Ensure App Configuration is pass-through (idempotent)
+      - name: Ensure App Configuration pass-through
         shell: bash
         run: |
           set -euo pipefail
@@ -69,17 +109,17 @@ jobs:
             az appconfig create -g "$rg" -n "$appcs" -l "$loc" --sku Free --arm-auth-mode pass-through
           az appconfig update -g "$rg" -n "$appcs" --arm-auth-mode pass-through
 
-      - name: Deploy REST source (Functions + Cosmos) with retry
+      - name: Deploy REST source (Functions + Cosmos)
         shell: pwsh
         env:
-          AZ_SUBSCRIPTION_NAME: ${{ secrets.AZ_SUBSCRIPTION_NAME }}
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-          AZ_RESOURCE_GROUP: rg-darko-winget
-          AZ_REGION: westeurope
-          SOURCE_NAME: d4rk0
+          SOURCE_NAME: ${{ inputs.source_name }}
+          AZ_RESOURCE_GROUP: ${{ inputs.resource_group }}
+          AZ_REGION: ${{ inputs.region }}
+          PUBLISHER_EMAIL: ${{ secrets.PUBLISHER_EMAIL }}
+          PUBLISHER_NAME: ${{ inputs.publisher_name }}
+          PERF: ${{ inputs.performance }}
         run: |
           $ErrorActionPreference = 'Stop'
-          az account set --subscription "$env:AZ_SUBSCRIPTION_NAME"
           if (-not (Get-Module -ListAvailable Microsoft.WinGet.RestSource)) {
             Install-Module Microsoft.WinGet.RestSource -Scope CurrentUser -Force -AllowPrerelease
           }
@@ -89,9 +129,11 @@ jobs:
               New-WinGetSource `
                 -Name "$env:SOURCE_NAME" `
                 -ResourceGroup "$env:AZ_RESOURCE_GROUP" `
-                -SubscriptionName "$env:AZ_SUBSCRIPTION_NAME" `
                 -Region "$env:AZ_REGION" `
-                -ImplementationPerformance Developer `
+                -ImplementationPerformance "$env:PERF" `
+                -PublisherName "$env:PUBLISHER_NAME" `
+                -PublisherEmail "$env:PUBLISHER_EMAIL" `
+                -ShowConnectionInstructions `
                 -InformationAction Continue `
                 -Verbose
               break
@@ -101,16 +143,15 @@ jobs:
             }
           }
 
-      - name: Verify Cosmos Free Tier (fail if not free)
+      - name: Verify Cosmos Free Tier result
         shell: bash
         run: |
           set -euo pipefail
           rg="${{ inputs.resource_group }}"
-          out="$(az cosmosdb list -g "$rg" --query "[].{name:name,free:enableFreeTier}" -o tsv)"
-          [ -z "$out" ] && { echo "No Cosmos DB accounts found in $rg"; exit 1; }
-          echo "$out"
-          echo "$out" | awk '{print $2}' | grep -q "false" && { echo "Cosmos DB NOT in Free Tier. Aborting to avoid charges."; exit 1; }
-          echo "Cosmos DB Free Tier OK"
+          list=$(az cosmosdb list -g "$rg" --query "[].{name:name,free:enableFreeTier}" -o tsv)
+          [ -z "$list" ] && { echo "No Cosmos DB en RG"; exit 1; }
+          echo "$list" | awk '{print $1" freeTier="$2}'
+          echo "$list" | awk '{print $2}' | grep -q "true" || { echo "La cuenta Cosmos del RG no está en Free Tier"; exit 1; }
 
       - name: Cap Application Insights to 0.1 GB/day
         shell: pwsh
@@ -118,24 +159,13 @@ jobs:
           Install-Module Az.ApplicationInsights -Force
           $rg = "${{ inputs.resource_group }}"
           $apps = Get-AzApplicationInsights -ResourceGroupName $rg
-          if ($apps) {
-            foreach ($a in $apps) {
-              Set-AzApplicationInsightsDailyCap -ResourceGroupName $rg -Name $a.Name -DailyCapGB 0.1 -DisableNotificationWhenHitCap
-            }
-          }
+          if ($apps) { foreach ($a in $apps) { Set-AzApplicationInsightsDailyCap -ResourceGroupName $rg -Name $a.Name -DailyCapGB 0.1 -DisableNotificationWhenHitCap } }
 
       - name: Show winget add command
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          rg="${{ inputs.resource_group }}"
-          name="${{ inputs.source_name }}"
-          host="$(az functionapp list -g "$rg" --query "[?contains(name,'$name')].defaultHostName" -o tsv | head -n1)"
-          if [ -z "$host" ]; then
-            host="$(az webapp list -g "$rg" --query "[?contains(name,'$name')].{h:defaultHostName}" -o tsv | head -n1)"
-          fi
-          if [ -n "$host" ]; then
-            echo "winget source add -n ${name} -t Microsoft.Rest -a https://${host}/winget/"
-          else
-            echo "No function host found. Check previous step logs."
-          }
+          $rg = "${{ inputs.resource_group }}"
+          $name = "${{ inputs.source_name }}"
+          $apim = az apim list -g $rg --query "[?contains(name,'$name')][0].gatewayUrl" -o tsv
+          if (-not $apim) { $apim = az apim list -g $rg --query "[0].gatewayUrl" -o tsv }
+          if ($apim) { Write-Host "winget source add -n $name -t Microsoft.Rest -a $apim/winget/" } else { Write-Host "No APIM found" }
