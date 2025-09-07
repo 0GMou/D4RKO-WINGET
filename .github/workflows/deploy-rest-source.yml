@@ -69,26 +69,37 @@ jobs:
             az appconfig create -g "$rg" -n "$appcs" -l "$loc" --sku Free --arm-auth-mode pass-through
           az appconfig update -g "$rg" -n "$appcs" --arm-auth-mode pass-through
 
-      - name: Deploy REST source (Functions + Cosmos)
-        id: deploy
+      - name: Deploy REST source (Functions + Cosmos) with retry
         shell: pwsh
+        env:
+          AZ_SUBSCRIPTION_NAME: ${{ secrets.AZ_SUBSCRIPTION_NAME }}
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          AZ_RESOURCE_GROUP: rg-darko-winget
+          AZ_REGION: westeurope
+          SOURCE_NAME: d4rk0
         run: |
-          Import-Module Microsoft.WinGet.RestSource
-          $name  = "${{ inputs.source_name }}"
-          $rg    = "${{ inputs.resource_group }}"
-          $loc   = "${{ inputs.region }}"
-          $perf  = "${{ inputs.performance }}"
-          $pub   = "${{ inputs.publisher_name }}"
-          $email = "${{ inputs.publisher_email }}"
-          New-WinGetSource `
-            -Name $name `
-            -ResourceGroup $rg `
-            -Region $loc `
-            -ImplementationPerformance $perf `
-            -PublisherName $pub `
-            -PublisherEmail $email `
-            -ShowConnectionInstructions `
-            -InformationAction Continue -Verbose
+          $ErrorActionPreference = 'Stop'
+          az account set --subscription "$env:AZ_SUBSCRIPTION_NAME"
+          if (-not (Get-Module -ListAvailable Microsoft.WinGet.RestSource)) {
+            Install-Module Microsoft.WinGet.RestSource -Scope CurrentUser -Force -AllowPrerelease
+          }
+          $max = 5
+          for ($i = 1; $i -le $max; $i++) {
+            try {
+              New-WinGetSource `
+                -Name "$env:SOURCE_NAME" `
+                -ResourceGroup "$env:AZ_RESOURCE_GROUP" `
+                -SubscriptionName "$env:AZ_SUBSCRIPTION_NAME" `
+                -Region "$env:AZ_REGION" `
+                -ImplementationPerformance Developer `
+                -InformationAction Continue `
+                -Verbose
+              break
+            } catch {
+              if ($i -eq $max) { throw }
+              Start-Sleep -Seconds (30 * $i)
+            }
+          }
 
       - name: Verify Cosmos Free Tier (fail if not free)
         shell: bash
