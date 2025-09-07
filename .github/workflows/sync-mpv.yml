@@ -1,4 +1,4 @@
-name: Sync MPV manifests (d4rk0)
+name: Sync MPV manifests (d4rko)
 
 on:
   workflow_dispatch:
@@ -47,13 +47,13 @@ jobs:
           }
 
           "VER=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $zipUrl = "https://github.com/$owner/$repo/releases/download/mpv-$ver/d4rk0.mpv-$ver-windows-x64.zip"
+          $zipUrl = "https://github.com/$owner/$repo/releases/download/mpv-$ver/d4rko.mpv-$ver-windows-x64.zip"
           "ZIP_URL=$zipUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          $dir = "manifests/d/d4rk0/d4rk0.mpv/$ver"
+          $dir = "manifests/d/d4rko/d4rko.mpv/$ver"
           "DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          if (Test-Path (Join-Path $dir "d4rk0.mpv.yaml")) {
+          if (Test-Path (Join-Path $dir "d4rko.mpv.yaml")) {
             "exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           } else {
             "exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -83,16 +83,16 @@ jobs:
           $zipUrl = $env:ZIP_URL
           $sha    = $env:SHA256
           $dir    = $env:DIR
-          $path   = Join-Path $dir "d4rk0.mpv.yaml"
+          $path   = Join-Path $dir "d4rko.mpv.yaml"
 
           $lines = @(
             '# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json'
-            'PackageIdentifier: d4rk0.mpv'
+            'PackageIdentifier: d4rko.mpv'
             "PackageVersion: $ver"
             'PackageLocale: en-US'
-            'Publisher: d4rk0'
+            'Publisher: d4rko'
             'PublisherUrl: https://github.com/0GMou/D4RKO'
-            'PackageName: MPV (d4rk0 build)'
+            'PackageName: MPV (d4rko build)'
             'License: GPL-2.0-or-later'
             'ShortDescription: Portable MPV build with OSC/Lua enabled; Windows x64.'
             'InstallerType: zip'
@@ -114,5 +114,5 @@ jobs:
         if: ${{ steps.meta.outputs.exists != 'true' }}
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Add d4rk0.mpv ${{ env.VER }}"
+          commit_message: "Add d4rko.mpv ${{ env.VER }}"
           add: "manifests/*"
